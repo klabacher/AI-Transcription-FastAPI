@@ -1,7 +1,10 @@
 import torch
 from enum import Enum
+import os
 
-# --- CONFIGURAÇÕES DE CACHE E LIMPEZA ---
+# --- CONFIGURAÇÕES GERAIS ---
+# Ative o modo debug setando a variável de ambiente DEBUG=true
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
 JOB_RETENTION_TIME_SECONDS = 3600
 JANITOR_SLEEP_INTERVAL_SECONDS = 300
 

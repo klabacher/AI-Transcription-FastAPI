@@ -94,6 +94,10 @@ Com o ambiente virtual ativado, inicie o servidor com Uvicorn:
 ```bash
 uvicorn main:app --reload
 ```
+Para debug:
+```bash
+DEBUG=true uvicorn main:app --reload
+```
 * O comando `--reload` reinicia o servidor automaticamente sempre que você salvar uma alteração no código.
 
 Na primeira vez que você iniciar, a API vai **baixar e configurar todos os modelos locais**. Isso pode levar vários minutos e consumir alguns gigabytes de espaço em disco. Nas inicializações seguintes, o processo será quase instantâneo.
