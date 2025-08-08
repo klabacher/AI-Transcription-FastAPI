@@ -1,0 +1,18 @@
+# --- Core API & Web UI ---
+fastapi
+uvicorn[standard]
+python-multipart
+jinja2
+aiofiles
+
+# --- ML & Audio Processing ---
+torch
+openai-whisper
+faster-whisper
+transformers[torch]
+accelerate
+sentencepiece
+soundfile
+
+# --- Cloud Services ---
+assemblyai

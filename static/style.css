@@ -1,0 +1,65 @@
+:root {
+    --bg-color: #121212;
+    --card-bg: #1e1e1e;
+    --primary-color: #bb86fc;
+    --secondary-color: #03dac6;
+    --text-color: #e0e0e0;
+    --border-color: #333;
+    --error-color: #cf6679;
+    --warning-color: #f1c40f;
+    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    margin: 0;
+    padding: 2rem;
+    line-height: 1.6;
+}
+.container { max-width: 1200px; margin: 0 auto; }
+header { text-align: center; margin-bottom: 2rem; }
+h1 { color: var(--primary-color); }
+h2 { color: var(--text-color); border-bottom: 2px solid var(--primary-color); padding-bottom: 8px; margin-top: 0; }
+.config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+.config-card { background-color: var(--card-bg); border-radius: 8px; padding: 1.5rem; border: 1px solid var(--border-color); }
+.form-group { margin-bottom: 1rem; }
+.form-group-checkbox { display: flex; align-items: center; gap: 10px; margin-bottom: 1rem; }
+label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
+select, input[type="password"], input[type="file"] { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid var(--border-color); background-color: #2c2c2c; color: var(--text-color); box-sizing: border-box; }
+button { width: 100%; padding: 12px 20px; border: none; border-radius: 8px; background-color: var(--primary-color); color: #121212; font-size: 1rem; font-weight: bold; cursor: pointer; transition: background-color 0.3s; }
+button:hover:not(:disabled) { background-color: #a050e0; }
+button:disabled { background-color: #555; color: #999; cursor: not-allowed; }
+button.secondary-button { background-color: #444; color: var(--text-color); margin-top: 10px;}
+button.secondary-button:hover:not(:disabled) { background-color: #555; }
+button.danger-button { background-color: var(--error-color); color: #121212; margin-top: 10px; }
+button.danger-button:hover:not(:disabled) { background-color: #b00020; }
+.action-button { background-color: var(--secondary-color); color: #121212; padding: 5px 10px; font-size: 0.8rem; width: auto; margin-right: 5px;}
+.cancel-button { background-color: var(--error-color); }
+
+#jobs-dashboard { margin-top: 2rem; background-color: var(--card-bg); padding: 1.5rem; border-radius: 8px; }
+.table-container { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid var(--border-color); }
+th { font-weight: 600; color: var(--primary-color); }
+td { vertical-align: middle; }
+.progress-col { width: 35%; }
+.status-queued { color: var(--warning-color); }
+.status-processing { color: #3498db; }
+.status-completed { color: #2ecc71; }
+.status-failed { color: var(--error-color); }
+.status-cancelling { color: var(--warning-color); font-style: italic;}
+.status-cancelled { color: #999; text-decoration: line-through;}
+.progress-bar-container { width: 100%; background-color: #333; border-radius: 5px; overflow: hidden; height: 20px; }
+.progress-bar { width: 0%; height: 100%; background-color: var(--secondary-color); transition: width 0.3s ease; text-align: center; line-height: 20px; color: #121212; font-size: 0.8rem; font-weight: bold; }
+
+.details-row { display: none; }
+.details-cell { padding: 0; }
+.details-content { background-color: #2c2c2c; padding: 1.5rem; }
+.result-tabs { display: flex; border-bottom: 1px solid var(--border-color); }
+.tab-button { padding: 10px 20px; cursor: pointer; border: none; background-color: transparent; color: var(--text-color); opacity: 0.7; }
+.tab-button.active { border-bottom: 3px solid var(--secondary-color); opacity: 1; font-weight: bold; }
+.tab-content { padding-top: 1rem; }
+.tab-content pre { background-color: var(--bg-color); padding: 1rem; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto; }
+.download-buttons { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color); display: flex; gap: 10px; flex-wrap: wrap; }
+.download-buttons button { width: auto; }
