@@ -31,16 +31,17 @@ document.addEventListener('DOMContentLoaded', () => {
         ui.modelSelect.disabled = true;
         ui.modelSelect.innerHTML = '<option>Carregando...</option>';
         try {
-            const isLocal = ui.engineSelect.value === 'local';
-            const endpoint = `/models?device_choice=${isLocal ? ui.deviceChoice.value : 'AUTO'}`;
+            const endpoint = `/models`;
             const response = await fetch(endpoint);
             if (!response.ok) throw new Error('Falha ao buscar modelos.');
             const data = await response.json();
             
             ui.modelSelect.innerHTML = '';
-            const models = data.available_models.filter(m => 
-                isLocal ? !m.startsWith('assemblyai') : m.startsWith('assemblyai')
-            );
+            
+            const models = data.available_models.filter(m => {
+                const isAssembly = m.startsWith('assemblyai');
+                return ui.engineSelect.value === 'assemblyai' ? isAssembly : !isAssembly;
+            });
 
             if (models.length === 0) {
                 ui.modelSelect.innerHTML = '<option>Nenhum modelo compatível</option>';
@@ -163,13 +164,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     async function cancelSingleJob(jobId) {
-        if (!confirm(`Tem certeza que deseja cancelar o job ${jobId.substring(0,8)}...?`)) return;
+        const row = document.getElementById(`job-row-${jobId}`);
+        const button = row.querySelector('.cancel-button');
+        if(button) {
+            button.disabled = true;
+            button.textContent = 'Cancelando...';
+        }
         try {
-            const response = await fetch(`/jobs/${jobId}/cancel`, { method: 'POST' });
-            const data = await response.json();
-            alert(data.message);
+            await fetch(`/jobs/${jobId}/cancel`, { method: 'POST' });
         } catch(error) {
-            alert("Erro ao cancelar o job.");
+            alert("Erro ao enviar sinal de cancelamento.");
+            if(button) {
+                button.disabled = false;
+                button.textContent = 'Cancelar';
+            }
         }
     }
 

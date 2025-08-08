@@ -2,6 +2,11 @@ import uuid
 import time
 import io
 import threading
+import sys
+import subprocess
+import json
+import os
+import signal
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Query, Response
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -9,23 +14,14 @@ from fastapi.templating import Jinja2Templates
 from typing import List, Optional
 from contextlib import asynccontextmanager
 from pathlib import Path
-import soundfile as sf
 
-from config import (AVAILABLE_MODELS, DeviceChoice, Language, get_processing_device,
+from config import (AVAILABLE_MODELS, DeviceChoice, Language,
                     filter_models_by_device, JOB_RETENTION_TIME_SECONDS,
                     JANITOR_SLEEP_INTERVAL_SECONDS)
-from utils import (extract_audios_from_zip, format_dialogue,
-                   prepare_download_package, calculate_eta)
-from engine import run_transcription
-
-try:
-    import whisper as openai_whisper
-    from faster_whisper import WhisperModel
-    from transformers import pipeline as hf_pipeline
-except ImportError as e:
-    raise ImportError(f"Biblioteca de ML faltando: {e}. Rode 'pip install -r requirements.txt'")
+from utils import (extract_audios_from_zip, format_dialogue, calculate_eta)
 
 JOBS = {}
+JOBS_LOCK = threading.Lock()
 janitor_stop_event = threading.Event()
 
 def run_janitor_task():
@@ -34,10 +30,10 @@ def run_janitor_task():
         try:
             jobs_to_delete = []
             now = time.time()
-            with threading.Lock():
+            with JOBS_LOCK:
                 for job_id, job in JOBS.items():
                     if job.get('status') in ('completed', 'failed', 'cancelled'):
-                        finished_at = job.get('finished_at', 0)
+                        finished_at = job.get('finished_at', time.time())
                         if (now - finished_at) > JOB_RETENTION_TIME_SECONDS:
                             jobs_to_delete.append(job_id)
 
@@ -47,43 +43,35 @@ def run_janitor_task():
                         del JOBS[job_id]
         except Exception as e:
             print(f"❌ Erro no Janitor: {e}")
-
         janitor_stop_event.wait(JANITOR_SLEEP_INTERVAL_SECONDS)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("="*80)
-    print("🚀 INICIANDO SETUP AUTOMÁTICO DOS MODELOS...")
-    for model_id, config in AVAILABLE_MODELS.items():
-        if config['impl'] == 'assemblyai':
-            print(f"ℹ️ Modelo de nuvem '{model_id}' configurado.")
-            continue
-        try:
-            print(f"\nVerificando modelo: '{model_id}'...")
-            if config['impl'] == 'openai':
-                openai_whisper.load_model(config['model_name'], device='cpu')
-            elif config['impl'] == 'faster':
-                WhisperModel(config['model_name'], device='cpu', compute_type='int8')
-            elif config['impl'] == 'hf_pipeline':
-                hf_pipeline("automatic-speech-recognition", model=config['model_name'])
-            print(f"✅ Modelo '{model_id}' está pronto.")
-        except Exception as e:
-            print(f"⚠️ AVISO: Falha ao verificar/baixar '{model_id}'. Erro: {e}")
-    print("\n" + "="*80)
-
+    print("🚀 API iniciada. O carregamento de modelos ocorrerá no primeiro job.")
+    print("="*80)
+    
     janitor_thread = threading.Thread(target=run_janitor_task, daemon=True)
     janitor_thread.start()
 
     yield
 
-    print("\nAPI desligando. Parando o Janitor...")
+    print("\nAPI desligando. Parando o Janitor e limpando processos...")
     janitor_stop_event.set()
     janitor_thread.join()
-    print("Janitor parado.")
+    with JOBS_LOCK:
+        for job_id, job in JOBS.items():
+            if job.get('worker_pid') and job['status'] == 'processing':
+                try:
+                    os.kill(job['worker_pid'], signal.SIGKILL)
+                    print(f"Processo worker remanescente (PID: {job['worker_pid']}) foi morto.")
+                except ProcessLookupError:
+                    pass
+    print("Limpeza concluída.")
 
 app = FastAPI(
     title="API de Transcrição Híbrida",
-    version="7.0.0",
+    version="9.0.0-secure",
     lifespan=lifespan
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -98,19 +86,14 @@ def read_root():
     return {"message": "API no ar. Acesse /ui para a interface de testes."}
 
 @app.get("/models", tags=["Configuração"])
-def get_available_models(device_choice: DeviceChoice = DeviceChoice.AUTO):
-    try:
-        device = get_processing_device(device_choice)
-        models = filter_models_by_device(device)
-        return {"device_used": device, "available_models": list(models.keys())}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+def get_available_models():
+    return {"available_models": list(AVAILABLE_MODELS.keys())}
 
 @app.get("/queues", tags=["Monitoramento"])
-async def get_queues(session_ids: Optional[str] = Query(None, description="IDs de sessão separados por vírgula")):
+async def get_queues(session_ids: Optional[str] = Query(None, description="IDs de sessão")):
     target_sessions = session_ids.split(',') if session_ids else None
     queue_view = []
-    with threading.Lock():
+    with JOBS_LOCK:
         for job_id, job in JOBS.items():
             if target_sessions and job.get('session_id') not in target_sessions:
                 continue
@@ -137,11 +120,7 @@ async def create_transcription_jobs(
         if not assemblyai_api_key: raise HTTPException(status_code=400, detail="Chave da API AssemblyAI é necessária.")
         job_config.update({"assemblyai_api_key": assemblyai_api_key, "speaker_labels": speaker_labels, "entity_detection": entity_detection, "device": "cloud"})
     else:
-        try:
-            device = get_processing_device(device_choice)
-            if model_config.get('req_gpu') and device == 'cpu': raise HTTPException(status_code=400, detail=f"Modelo '{model_id}' requer GPU.")
-            job_config["device"] = device
-        except ValueError as e: raise HTTPException(status_code=400, detail=str(e))
+        job_config["device_choice"] = device_choice.value
 
     audios_to_process = []
     for file in files:
@@ -153,113 +132,142 @@ async def create_transcription_jobs(
     if not audios_to_process: raise HTTPException(status_code=400, detail="Nenhum arquivo de áudio válido encontrado.")
 
     jobs_created = []
-    for audio in audios_to_process:
-        job_id = str(uuid.uuid4())
-        JOBS[job_id] = {
-            "id": job_id, "session_id": session_id, "internal_path": audio["internal_path"],
-            "status": "queued", "progress": 0, "config": job_config, "created_at": time.time(),
-            "started_at": None, "finished_at": None,
-            "debug_log": [f"Job criado para '{audio['internal_path']}'..."], "result": None
-        }
-        background_tasks.add_task(process_single_file_job, job_id, audio['file_bytes'])
-        jobs_created.append({"job_id": job_id, "filename": audio["internal_path"]})
+    with JOBS_LOCK:
+        for audio in audios_to_process:
+            job_id = str(uuid.uuid4())
+            JOBS[job_id] = {
+                "id": job_id, "session_id": session_id, "internal_path": audio["internal_path"],
+                "status": "queued", "progress": 0, "config": job_config, "created_at": time.time(),
+                "started_at": None, "finished_at": None, "worker_pid": None,
+                "debug_log": [f"Job criado para '{audio['internal_path']}'..."], "result": None
+            }
+            background_tasks.add_task(process_single_file_job, job_id, audio['file_bytes'])
+            jobs_created.append({"job_id": job_id, "filename": audio["internal_path"]})
 
     return JSONResponse(content={"jobs_created": jobs_created})
 
 @app.post("/jobs/{job_id}/cancel", status_code=200, tags=["Transcrição"])
 def cancel_job(job_id: str):
-    with threading.Lock():
+    with JOBS_LOCK:
         job = JOBS.get(job_id)
         if not job: raise HTTPException(status_code=404, detail="Job não encontrado.")
-        if job['status'] in ['queued', 'processing']:
-            job['status'] = 'cancelling'
-            job['debug_log'].append("Sinal de cancelamento recebido.")
-            return {"message": "Sinal de cancelamento enviado. O job irá parar em breve."}
-        return {"message": f"Não é possível cancelar. Status atual do job: {job['status']}."}
+        
+        pid = job.get('worker_pid')
+        if pid and job['status'] == 'processing':
+            try:
+                os.kill(pid, signal.SIGKILL)
+                job['status'] = 'cancelled'
+                job['finished_at'] = time.time()
+                job['debug_log'].append(f"Processo (PID: {pid}) morto na paulada.")
+                return {"message": "Processo morto com sucesso."}
+            except ProcessLookupError:
+                job['status'] = 'cancelled'; job['finished_at'] = time.time()
+                return {"message": "Processo já havia terminado."}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Falha ao matar o processo: {e}")
+        
+        elif job['status'] == 'queued':
+            job['status'] = 'cancelled'; job['finished_at'] = time.time()
+            return {"message": "Job cancelado da fila."}
+
+        return {"message": f"Não foi possível cancelar. Status: {job['status']}."}
 
 @app.post("/queues/cancel-session", status_code=200, tags=["Monitoramento"])
 def cancel_session_jobs(session_id: str = Form(...)):
     if not session_id: raise HTTPException(status_code=400, detail="ID da sessão é obrigatório.")
     
     cancelled_count = 0
-    with threading.Lock():
-        for job_id, job in JOBS.items():
-            if job.get('session_id') == session_id and job.get('status') in ['queued', 'processing']:
-                job['status'] = 'cancelling'
-                job['debug_log'].append("Sinal de cancelamento em massa recebido.")
-                cancelled_count += 1
+    with JOBS_LOCK:
+        for job in JOBS.values():
+            if job.get('session_id') == session_id:
+                if job.get('status') == 'processing' and job.get('worker_pid'):
+                    try:
+                        os.kill(job['worker_pid'], signal.SIGKILL)
+                        job['status'] = 'cancelled'; job['finished_at'] = time.time()
+                        cancelled_count += 1
+                    except ProcessLookupError: pass
+                elif job.get('status') == 'queued':
+                    job['status'] = 'cancelled'; job['finished_at'] = time.time()
+                    cancelled_count += 1
     
-    return {"message": f"{cancelled_count} jobs da sessão {session_id[:8]}... foram sinalizados para cancelamento."}
-
+    return {"message": f"{cancelled_count} jobs da sessão {session_id[:8]}... foram cancelados."}
 
 @app.get("/jobs/{job_id}", tags=["Transcrição"])
 def get_job_status(job_id: str):
-    job = JOBS.get(job_id)
-    if not job: raise HTTPException(status_code=404, detail="Job não encontrado. Pode ter expirado.")
-    job_with_eta = job.copy()
-    job_with_eta["eta_timestamp"] = calculate_eta(job)
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job: raise HTTPException(status_code=404, detail="Job não encontrado. Pode ter expirado.")
+        job_with_eta = job.copy()
+        job_with_eta["eta_timestamp"] = calculate_eta(job)
     return JSONResponse(content=job_with_eta)
 
 @app.get("/jobs/{job_id}/download", tags=["Resultados"])
 def download_job_result(job_id: str, text_type: str = "transcription_dialogue_markdown"):
-    job = JOBS.get(job_id)
-    if not job or job['status'] != 'completed' or not job.get('result'): 
-        raise HTTPException(status_code=404, detail="Job não concluído ou resultado indisponível.")
-    
-    result_text = job['result'].get(text_type, "Conteúdo não encontrado.")
-    filename = Path(job['internal_path']).with_suffix('.txt').name
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job or job['status'] != 'completed' or not job.get('result'): 
+            raise HTTPException(status_code=404, detail="Job não concluído ou resultado indisponível.")
+        result_text = job['result'].get(text_type, "Conteúdo não encontrado.")
+        filename = Path(job['internal_path']).with_suffix('.txt').name
     
     return Response(content=result_text, media_type="text/plain", headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
 def process_single_file_job(job_id: str, audio_bytes: bytes):
-    job = JOBS.get(job_id)
-    if not job: return
-
-    if job.get('status') == 'cancelling':
-        job['status'] = 'cancelled'
-        job['finished_at'] = time.time()
-        job['debug_log'].append("Job cancelado antes de iniciar.")
-        return
-
-    job['status'], job['started_at'] = 'processing', time.time()
-    job['progress'] = 5
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job or job['status'] != 'queued': return
+        job['status'], job['started_at'] = 'processing', time.time()
     
     try:
-        internal_path = job['internal_path']
-        duration_seconds = 0
-        try:
-            audio_info = sf.info(io.BytesIO(audio_bytes))
-            duration_seconds = audio_info.duration
-            job['debug_log'].append(f"Duração do áudio: {duration_seconds:.2f}s.")
-        except Exception as e:
-            job['debug_log'].append(f"Aviso: Não foi possível ler a duração do áudio. {e}")
-
-        job['debug_log'].append(f"Iniciando transcrição com {job['config']['model_id']}...")
-        result = run_transcription(job, audio_bytes, internal_path, duration_seconds)
+        json_job_data = json.dumps(job).encode('utf-8')
+        job_data_size = len(json_job_data).to_bytes(4, 'big')
+        audio_data_size = len(audio_bytes).to_bytes(4, 'big')
         
-        if job.get('status') == 'cancelling':
-             raise InterruptedError("Job cancelado durante o processamento final.")
+        process = subprocess.Popen(
+            [sys.executable, "worker.py"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        with JOBS_LOCK: JOBS[job_id]['worker_pid'] = process.pid
 
-        job['result'] = {
-            "internal_path": internal_path, "filename": Path(internal_path).name,
-            "transcription_raw": result['text'],
-            "transcription_dialogue_simple": format_dialogue(result['segments'], use_markdown=False),
-            "transcription_dialogue_markdown": format_dialogue(result['segments'], use_markdown=True),
-            "entities": result['entities']
-        }
-        job['debug_log'].append("Transcrição concluída com sucesso.")
-        job['status'] = 'completed'
-    
-    except InterruptedError:
-        job['status'] = 'cancelled'
-        job['debug_log'].append("Processo de transcrição interrompido com sucesso.")
+        process.stdin.write(job_data_size)
+        process.stdin.write(json_job_data)
+        process.stdin.write(audio_data_size)
+        process.stdin.write(audio_bytes)
+        process.stdin.close()
+        
+        stdout, stderr = process.communicate()
+        
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            if not job or job['status'] == 'cancelled': return
+
+            if process.returncode == 0:
+                output = json.loads(stdout.decode('utf-8'))
+                result_data = output['result']
+                job['result'] = {
+                    "internal_path": job['internal_path'], "filename": Path(job['internal_path']).name,
+                    "transcription_raw": result_data['text'],
+                    "transcription_dialogue_simple": format_dialogue(result_data['segments'], use_markdown=False),
+                    "transcription_dialogue_markdown": format_dialogue(result_data['segments'], use_markdown=True),
+                    "entities": result_data['entities']
+                }
+                job['status'] = 'completed'
+            else:
+                error_info = json.loads(stderr.decode('utf-8'))
+                job['status'] = 'failed'
+                job['debug_log'].append(f"ERRO no worker: {error_info.get('error')}")
+                job['debug_log'].append(f"Traceback do worker:\n{error_info.get('traceback')}")
 
     except Exception as e:
         import traceback
-        job['status'] = 'failed'
-        job['debug_log'].append(f"ERRO: {e}\n{traceback.format_exc()}")
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            if job and job['status'] != 'cancelled':
+                job['status'] = 'failed'
+                job['debug_log'].append(f"ERRO do Gerente: {e}\n{traceback.format_exc()}")
     finally:
-        if JOBS.get(job_id): 
-            job['finished_at'] = time.time()
-            if job['status'] not in ['failed', 'cancelled', 'cancelling']:
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+            if job:
+                job['finished_at'] = time.time()
                 job['progress'] = 100

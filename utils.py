@@ -47,39 +47,6 @@ def format_dialogue(utterances: list, use_markdown: bool) -> str:
 
     return "\n\n".join(dialogue_lines)
 
-
-def prepare_download_package(job_results: list, package_format: str, text_type: str) -> dict:
-    """Prepara um pacote de download, recriando a estrutura de pastas original."""
-    if not job_results: return None
-
-    def create_concatenated_content():
-        content = ""
-        for result in job_results:
-            if "error" in result: continue
-            content += f"///// {result['internal_path']} /////\n\n{result[text_type]}\n\n\n"
-        return content
-
-    def create_zip_file(include_concatenated=False):
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for result in job_results:
-                if "error" in result: continue
-                txt_filename = str(Path(result['internal_path']).with_suffix('.txt'))
-                zf.writestr(txt_filename, result[text_type])
-            if include_concatenated:
-                zf.writestr("_resultado_final_concatenado.txt", create_concatenated_content())
-        zip_buffer.seek(0)
-        return zip_buffer
-
-    if package_format == "concatenado":
-        return {"data": create_concatenated_content().encode("utf-8"), "filename": "transcricao_concatenada.txt", "mime": "text/plain"}
-    if package_format == "individuais":
-        return {"data": create_zip_file(False), "filename": "transcricoes_individuais.zip", "mime": "application/zip"}
-    if package_format == "completo":
-        return {"data": create_zip_file(True), "filename": "pacote_completo_transcricoes.zip", "mime": "application/zip"}
-    
-    return None
-
 def calculate_eta(job: dict) -> float | None:
     """Calcula o timestamp estimado de conclusão de um job em andamento."""
     status = job.get('status')
@@ -89,7 +56,7 @@ def calculate_eta(job: dict) -> float | None:
     progress = job.get('progress', 0)
     started_at = job.get('started_at')
     
-    if not started_at or progress <= 5: # Ignora o progresso inicial para evitar ETAs absurdos
+    if not started_at or progress <= 5:
         return None
 
     now = time.time()

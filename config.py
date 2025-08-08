@@ -2,12 +2,7 @@ import torch
 from enum import Enum
 
 # --- CONFIGURAÇÕES DE CACHE E LIMPEZA ---
-# Tempo (em segundos) que um job concluído ou falho deve ser mantido na memória antes de ser apagado.
-# Padrão: 3600 segundos = 1 hora
 JOB_RETENTION_TIME_SECONDS = 3600
-
-# Intervalo (em segundos) em que o processo de limpeza (janitor) irá rodar para verificar jobs antigos.
-# Padrão: 300 segundos = 5 minutos
 JANITOR_SLEEP_INTERVAL_SECONDS = 300
 
 # --- OPÇÕES DE CONTROLE ---

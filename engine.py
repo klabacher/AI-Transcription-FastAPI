@@ -43,7 +43,6 @@ def get_model(model_id: str, config: dict, device: str):
     return model
 
 def run_transcription(job: dict, audio_bytes: bytes, internal_path: str, duration_seconds: float) -> dict:
-    """Executa a transcrição, passando o job para atualizações de progresso."""
     job_config = job['config']
     impl = job_config['model_config']['impl']
     
@@ -56,6 +55,8 @@ def run_transcription(job: dict, audio_bytes: bytes, internal_path: str, duratio
             tmp_audio_path = tmp.name
 
         if impl == 'assemblyai':
+            # Para AssemblyAI, o cancelamento é antes do envio, pois não podemos matar o processo deles.
+            if job.get('status') == 'cancelling': raise InterruptedError("Job cancelado antes do envio para a API.")
             return run_assemblyai_transcription(job, tmp_audio_path)
         else:
             return run_local_transcription(job, tmp_audio_path, duration_seconds)
@@ -65,7 +66,6 @@ def run_transcription(job: dict, audio_bytes: bytes, internal_path: str, duratio
             os.remove(tmp_audio_path)
 
 def run_assemblyai_transcription(job: dict, audio_path: str) -> dict:
-    """Executa a transcrição com AssemblyAI, respeitando o idioma."""
     job_config = job['config']
     aai.settings.api_key = job_config['assemblyai_api_key']
     
@@ -87,46 +87,48 @@ def run_assemblyai_transcription(job: dict, audio_path: str) -> dict:
     }
 
 def run_local_transcription(job: dict, audio_path: str, duration_seconds: float) -> dict:
-    """Executa a transcrição local, com progresso granular para faster-whisper."""
     job_config = job['config']
-    model = get_model(job_config['model_id'], job_config['model_config'], job_config['device'])
+    model_config = job_config['model_config']
+    
+    # A decisão de device agora é feita no worker, aqui apenas usamos
+    from config import get_processing_device, DeviceChoice
+    device_choice_str = job_config.get("device_choice", "AUTOMATICO")
+    device_choice = DeviceChoice(device_choice_str)
+    device = get_processing_device(device_choice)
+    
+    model = get_model(job_config['model_id'], model_config, device)
     
     text_result, segments_result = "", []
-    model_config = job_config['model_config']
-    language = job_config['language']
+    language_code = job_config['language']
     
     if model_config['impl'] == 'faster':
-        job['debug_log'].append("Usando modo de progresso granular.")
-        segments, _ = model.transcribe(audio_path, language=language)
+        segments, _ = model.transcribe(audio_path, language=language_code)
         full_text_parts = []
         for segment in segments:
+            # A checagem de cancelamento foi movida para o worker/main.py que pode matar o processo
             full_text_parts.append(segment.text)
             segments_result.append({'start': segment.start, 'text': segment.text.strip(), 'speaker': None})
-            if duration_seconds > 0:
-                progress = int((segment.end / duration_seconds) * 100)
-                job['progress'] = max(job['progress'], min(progress, 99))
         text_result = "".join(full_text_parts).strip()
     
     else:
-        job['debug_log'].append("Usando modo de progresso simulado.")
-        job['progress'] = 25
-        
         if model_config['impl'] == 'openai':
-            result = model.transcribe(audio_path, language=language, fp16=(job_config['device'] == 'cuda'))
+            result = model.transcribe(audio_path, language=language_code, fp16=(device == 'cuda'))
             text_result = result.get('text', ' ')
             if 'segments' in result:
                 segments_result = [{'start': s['start'], 'text': s['text'], 'speaker': None} for s in result['segments']]
 
         elif model_config['impl'] == 'hf_pipeline':
-            kwargs = {"return_timestamps": True, "generate_kwargs": {"language": language}}
+            language_map = {'pt': 'portuguese', 'en': 'english'}
+            task_language = language_map.get(language_code, 'portuguese')
+            generate_kwargs = {"language": task_language, "task": "transcribe"}
+            
+            kwargs = {"return_timestamps": True, "generate_kwargs": generate_kwargs}
             if "distil-whisper" in model_config['model_name']:
-                kwargs.update({"chunk_length_s": 30, "stride_length_s": 5})
+                 kwargs.update({"chunk_length_s": 30, "stride_length_s": 5})
 
             result = model(audio_path, **kwargs)
             text_result = result.get('text', ' ').strip()
             if 'chunks' in result:
                 segments_result = [{'start': c['timestamp'][0], 'text': c['text'].strip(), 'speaker': None} for c in result.get('chunks', [])]
         
-        job['progress'] = 75
-
     return {"text": text_result, "segments": segments_result, "entities": []}
