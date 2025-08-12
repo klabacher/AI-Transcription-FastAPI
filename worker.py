@@ -1,83 +1,75 @@
-import sys
 import os
-import io
+import tempfile
 import json
+import logging
 import soundfile as sf
 from pathlib import Path
-import tempfile
+from logging_config import setup_worker_logging_json, get_logger
+from engine import load_model, transcribe_with_faster, transcribe_with_hf_pipeline
 
-sys.path.append(os.getcwd())
 
-from logging_config import setup_worker_logging, get_logger
-from engine import run_local_transcription, run_assemblyai_transcription
-
-def worker_task(json_job_data, audio_bytes):
+def worker_main(job: dict, audio_path: str, conn):
     """
-    Esta é a função que roda no processo isolado (o "bunker").
-    Ela agora se comunica via JSON e envia logs para stderr.
+    job: dicionário com configuração
+    audio_path: caminho do arquivo temporário
+    conn: Connection (multiprocessing.Pipe) para enviar mensagens ao gerente
+    Mensagens: {"type": "PROGRESS"/"RESULT"/"FATAL_ERROR", "payload": ...}
     """
-    setup_worker_logging()
-    logger = get_logger("worker")
+    setup_worker_logging_json()
+    logger = get_logger('worker')
 
     try:
-        job = json.loads(json_job_data)
-        logger.info(f"Worker (PID: {os.getpid()}) iniciado para o job {job['id'][:8]}.")
-        internal_path = job['internal_path']
-        
-        duration_seconds = 0
+        logger.info(f"Worker iniciando job {job['id'][:8]} | arquivo: {audio_path}")
+
+        duration = 0.0
         try:
-            logger.debug("Lendo metadados do áudio...")
-            audio_info = sf.info(io.BytesIO(audio_bytes))
-            duration_seconds = audio_info.duration
-            logger.debug(f"Duração do áudio detectada: {duration_seconds:.2f}s")
-        except Exception:
-            logger.warning("Não foi possível ler a duração do áudio.")
-            pass
+            info = sf.info(audio_path)
+            duration = float(info.duration or 0.0)
+            logger.debug(f"Duração detectada: {duration}s")
+        except Exception as e:
+            logger.warning(f"Não foi possível ler metadados do áudio: {e}")
 
-        suffix = Path(internal_path).suffix
-        tmp_audio_path = None
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(audio_bytes)
-            tmp_audio_path = tmp.name
-        
-        logger.debug(f"Arquivo de áudio temporário criado em: {tmp_audio_path}")
+        model_cfg = job['config']['model_config']
+        device = job['config'].get('device') or job['config'].get('device_choice') or 'cpu'
 
-        impl = job['config']['model_config']['impl']
-        if impl == 'assemblyai':
-            logger.info("Roteando para a engine da AssemblyAI.")
-            result = run_assemblyai_transcription(job, tmp_audio_path)
+        model = load_model(job['config']['model_id'], model_cfg, device)
+
+        impl = model_cfg['impl']
+        if impl == 'faster':
+            gen = transcribe_with_faster(model, audio_path, job['config']['language'], duration)
         else:
-            logger.info(f"Roteando para a engine local: {impl}")
-            result = run_local_transcription(job, tmp_audio_path, duration_seconds)
+            gen = transcribe_with_hf_pipeline(model, audio_path, job['config']['language'])
 
-        os.remove(tmp_audio_path)
-        logger.debug("Arquivo de áudio temporário removido.")
+        collected_segments = []
+        text_result = ''
 
-        success_response = json.dumps({"status": "completed", "result": result})
-        sys.stdout.write(success_response)
-        sys.stdout.flush()
-        logger.info("Resultado de sucesso enviado para o gerente.")
+        for item in gen:
+            if isinstance(item, int):
+                try:
+                    conn.send({'type': 'PROGRESS', 'payload': int(item)})
+                except Exception:
+                    logger.warning('Falha ao enviar PROGRESS; conexao pode estar fechada')
+            elif isinstance(item, dict) and 'segment' in item:
+                seg = item['segment']
+                collected_segments.append({'start': seg.get('start', 0), 'text': seg.get('text', '').strip()})
+            elif isinstance(item, dict) and 'text' in item:
+                text_result = item.get('text', '').strip()
+                # If segments present in final item use them
+                collected_segments = item.get('segments', collected_segments)
+
+        # Resultado final
+        conn.send({'type': 'RESULT', 'payload': {'text': text_result, 'segments': collected_segments, 'entities': []}})
 
     except Exception as e:
         import traceback
-        logger.error(f"Worker falhou com uma exceção: {e}")
-        error_info = {
-            "status": "failed",
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
-        error_response = json.dumps(error_info)
-        sys.stderr.write(error_response + '\n') # Adiciona newline para separar dos logs
-        sys.stderr.flush()
-
-if __name__ == "__main__":
-    job_data_size_bytes = sys.stdin.buffer.read(4)
-    job_data_size = int.from_bytes(job_data_size_bytes, 'big')
-    json_job_data = sys.stdin.buffer.read(job_data_size).decode('utf-8')
-
-    audio_data_size_bytes = sys.stdin.buffer.read(4)
-    audio_data_size = int.from_bytes(audio_data_size_bytes, 'big')
-    audio_bytes = sys.stdin.buffer.read(audio_data_size)
-    
-    worker_task(json_job_data, audio_bytes)
+        tb = traceback.format_exc()
+        logger.critical(f"Worker fatal: {e}\n{tb}")
+        try:
+            conn.send({'type': 'FATAL_ERROR', 'payload': {'error': str(e), 'traceback': tb}})
+        except Exception:
+            logger.error('Não foi possível enviar FATAL_ERROR por pipe.')
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

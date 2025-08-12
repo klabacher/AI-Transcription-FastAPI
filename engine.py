@@ -1,134 +1,85 @@
-import torch
-import tempfile
-import os
-import io
-from pathlib import Path
+import logging
+from typing import Generator, Dict, Any
+from config import AVAILABLE_MODELS
 
-try:
-    import whisper as openai_whisper
-    from faster_whisper import WhisperModel
-    from transformers import pipeline as hf_pipeline
-    import assemblyai as aai
-except ImportError as e:
-    raise ImportError(f"Biblioteca de ML faltando: {e}. Rode 'pip install -r requirements.txt'.")
+logger = logging.getLogger('engine')
+MODEL_INSTANCES: Dict[str, Any] = {}
 
-MODEL_CACHE = {}
 
-def get_model(model_id: str, config: dict, device: str):
-    cache_key = f"{model_id}_{device}"
-    if cache_key in MODEL_CACHE:
-        return MODEL_CACHE[cache_key]
+def load_model(model_id: str, config: dict, device: str):
+    key = f"{model_id}:{device}"
+    if key in MODEL_INSTANCES:
+        return MODEL_INSTANCES[key]
 
-    impl = config['impl']
-    if impl == 'assemblyai':
-        return None
+    impl = config.get('impl')
+    name = config.get('model_name')
+    logger.info(f"Carregando modelo {model_id} ({impl}) para dispositivo {device}")
 
-    model_name = config['model_name']
-    print(f"INFO: Carregando modelo '{model_id}' para dispositivo '{device}'...")
+    if impl == 'faster':
+        from faster_whisper import WhisperModel
+        compute_type = config.get('compute_type', None)
+        model = WhisperModel(name, device=device, compute_type=compute_type)
 
-    if impl == 'openai':
-        model = openai_whisper.load_model(model_name, device=device)
-    elif impl == 'faster':
-        compute_type = config.get('compute_type', 'default')
-        if device == 'cpu' and compute_type not in ['int8', 'float32']:
-            compute_type = 'int8'
-        model = WhisperModel(model_name, device=device, compute_type=compute_type)
     elif impl == 'hf_pipeline':
+        from transformers import pipeline
         torch_device = 0 if device == 'cuda' else -1
-        model = hf_pipeline("automatic-speech-recognition", model=model_name, device=torch_device)
+        # return_timestamps is used when calling
+        model = pipeline('automatic-speech-recognition', model=name, device=torch_device)
+
     else:
         raise ValueError(f"Implementação desconhecida: {impl}")
-    
-    MODEL_CACHE[cache_key] = model
+
+    MODEL_INSTANCES[key] = model
+    logger.info(f"Modelo {model_id} carregado com sucesso")
     return model
 
-def run_transcription(job: dict, audio_bytes: bytes, internal_path: str, duration_seconds: float) -> dict:
-    job_config = job['config']
-    impl = job_config['model_config']['impl']
-    
-    suffix = Path(internal_path).suffix
-    tmp_audio_path = None
-    
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(audio_bytes)
-            tmp_audio_path = tmp.name
 
-        if impl == 'assemblyai':
-            # Para AssemblyAI, o cancelamento é antes do envio, pois não podemos matar o processo deles.
-            if job.get('status') == 'cancelling': raise InterruptedError("Job cancelado antes do envio para a API.")
-            return run_assemblyai_transcription(job, tmp_audio_path)
+def transcribe_with_faster(model, audio_path: str, language: str, duration: float) -> Generator:
+    """Gera progresso (int) e items dict com segmento ou resultado final."""
+    segments, info = model.transcribe(audio_path, language=language)
+    full_parts = []
+    # segments is iterable of objects with start, end, text
+    for seg in segments:
+        full_parts.append(seg.text)
+        # progress estimate based on segment end and duration
+        if duration and duration > 0:
+            progress = int((seg.end / duration) * 100)
+            progress = max(0, min(99, progress))
+            yield progress
         else:
-            return run_local_transcription(job, tmp_audio_path, duration_seconds)
+            yield 50
+        yield {'segment': {'start': seg.start, 'end': seg.end, 'text': seg.text}}
 
-    finally:
-        if tmp_audio_path and os.path.exists(tmp_audio_path):
-            os.remove(tmp_audio_path)
+    yield {'text': ''.join(full_parts).strip(), 'segments': [{'start': s.start, 'text': s.text} for s in segments]}
 
-def run_assemblyai_transcription(job: dict, audio_path: str) -> dict:
-    job_config = job['config']
-    aai.settings.api_key = job_config['assemblyai_api_key']
-    
-    config = aai.TranscriptionConfig(
-        speaker_labels=job_config.get('speaker_labels', False),
-        entity_detection=job_config.get('entity_detection', False),
-        language_code=job_config['language']
-    )
-    transcriber = aai.Transcriber(config=config)
-    transcript = transcriber.transcribe(audio_path)
 
-    if transcript.status == aai.TranscriptStatus.error:
-        raise RuntimeError(f"Erro da API AssemblyAI: {transcript.error}")
+def transcribe_with_hf_pipeline(model, audio_path: str, language: str) -> Generator:
+    # HuggingFace pipeline often returns full result; emulate progress
+    yield 10
+    try:
+        result = model(audio_path, return_timestamps=True)
+    except TypeError:
+        # Some pipelines expect a dict param
+        result = model(audio_path)
 
-    return {
-        "text": transcript.text or " ",
-        "segments": [vars(utt) for utt in transcript.utterances] if transcript.utterances else [],
-        "entities": [vars(ent) for ent in transcript.entities] if transcript.entities else []
-    }
+    yield 80
 
-def run_local_transcription(job: dict, audio_path: str, duration_seconds: float) -> dict:
-    job_config = job['config']
-    model_config = job_config['model_config']
-    
-    # A decisão de device agora é feita no worker, aqui apenas usamos
-    from config import get_processing_device, DeviceChoice
-    device_choice_str = job_config.get("device_choice", "AUTOMATICO")
-    device_choice = DeviceChoice(device_choice_str)
-    device = get_processing_device(device_choice)
-    
-    model = get_model(job_config['model_id'], model_config, device)
-    
-    text_result, segments_result = "", []
-    language_code = job_config['language']
-    
-    if model_config['impl'] == 'faster':
-        segments, _ = model.transcribe(audio_path, language=language_code)
-        full_text_parts = []
-        for segment in segments:
-            # A checagem de cancelamento foi movida para o worker/main.py que pode matar o processo
-            full_text_parts.append(segment.text)
-            segments_result.append({'start': segment.start, 'text': segment.text.strip(), 'speaker': None})
-        text_result = "".join(full_text_parts).strip()
-    
-    else:
-        if model_config['impl'] == 'openai':
-            result = model.transcribe(audio_path, language=language_code, fp16=(device == 'cuda'))
-            text_result = result.get('text', ' ')
-            if 'segments' in result:
-                segments_result = [{'start': s['start'], 'text': s['text'], 'speaker': None} for s in result['segments']]
+    text = ''
+    chunks = []
+    if isinstance(result, dict):
+        text = result.get('text', '')
+        chunks = result.get('chunks', []) or result.get('segments', [])
+    elif isinstance(result, str):
+        text = result
+    # normalize chunks
+    segments = []
+    for c in chunks:
+        # chunk may have 'timestamp' or 'start'
+        start = None
+        if isinstance(c.get('timestamp', None), (list, tuple)):
+            start = c['timestamp'][0]
+        elif 'start' in c:
+            start = c['start']
+        segments.append({'start': start or 0, 'text': c.get('text', '')})
 
-        elif model_config['impl'] == 'hf_pipeline':
-            language_map = {'pt': 'portuguese', 'en': 'english'}
-            task_language = language_map.get(language_code, 'portuguese')
-            generate_kwargs = {"language": task_language, "task": "transcribe"}
-            
-            kwargs = {"return_timestamps": True, "generate_kwargs": generate_kwargs}
-            if "distil-whisper" in model_config['model_name']:
-                 kwargs.update({"chunk_length_s": 30, "stride_length_s": 5})
-
-            result = model(audio_path, **kwargs)
-            text_result = result.get('text', ' ').strip()
-            if 'chunks' in result:
-                segments_result = [{'start': c['timestamp'][0], 'text': c['text'].strip(), 'speaker': None} for c in result.get('chunks', [])]
-        
-    return {"text": text_result, "segments": segments_result, "entities": []}
+    yield {'text': text.strip(), 'segments': segments}

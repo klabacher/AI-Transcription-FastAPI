@@ -1,46 +1,54 @@
-import torch
 from enum import Enum
-import os
+import torch
 
-# --- CONFIGURAÇÕES GERAIS ---
-# Ative o modo debug setando a variável de ambiente DEBUG=true
-DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
+DEBUG = True
 JOB_RETENTION_TIME_SECONDS = 3600
 JANITOR_SLEEP_INTERVAL_SECONDS = 300
 
-# --- OPÇÕES DE CONTROLE ---
 class DeviceChoice(str, Enum):
-    AUTO = "AUTOMATICO"
-    CPU = "CPU"
-    GPU = "GPU"
+    AUTO = "automatic"
+    CPU = "cpu"
+    GPU = "gpu"
 
 class Language(str, Enum):
     PORTUGUESE = "pt"
     ENGLISH = "en"
 
-# --- MODELOS DISPONÍVEIS ---
+# Model registry: apenas faster-whisper e distil-ptbr
 AVAILABLE_MODELS = {
-    'assemblyai_best': {'impl': 'assemblyai', 'model_name': 'best', 'req_gpu': False},
-    'openai_small': {'impl': 'openai', 'model_name': 'small', 'req_gpu': False},
-    'openai_medium': {'impl': 'openai', 'model_name': 'medium', 'req_gpu': False},
-    'openai_large-v3': {'impl': 'openai', 'model_name': 'large-v3', 'req_gpu': False},
-    'faster_small_fp16': {'impl': 'faster', 'model_name': 'small', 'compute_type': 'float16', 'req_gpu': True},
-    'faster_medium_fp16': {'impl': 'faster', 'model_name': 'medium', 'compute_type': 'float16', 'req_gpu': True},
-    'faster_large-v3_fp16': {'impl': 'faster', 'model_name': 'large-v3', 'compute_type': 'float16', 'req_gpu': True},
-    'faster_large-v3_int8': {'impl': 'faster', 'model_name': 'large-v3', 'compute_type': 'int8', 'req_gpu': False},
-    'distil_large-v2': {'impl': 'hf_pipeline', 'model_name': 'distil-whisper/distil-large-v2', 'req_gpu': False},
-    'distil_large-v3_pt-br_freds0': {'impl': 'hf_pipeline', 'model_name': 'freds0/distil-whisper-large-v3-ptbr', 'req_gpu': False},
+    "faster_small_fp16": {
+        "impl": "faster",
+        "model_name": "small",
+        "compute_type": "float16",
+        "req_gpu": True
+    },
+    "distil_ptbr": {
+        "impl": "hf_pipeline",
+        "model_name": "freds0/distil-whisper-large-v3-ptbr",
+        "req_gpu": False
+    },
 }
 
-def get_processing_device(choice: DeviceChoice) -> str:
-    has_gpu = torch.cuda.is_available()
-    if choice == DeviceChoice.GPU and not has_gpu:
-        raise ValueError("GPU foi solicitada, mas não está disponível ou configurada (CUDA).")
-    if choice == DeviceChoice.AUTO:
-        return 'cuda' if has_gpu else 'cpu'
-    return choice.value.lower()
 
-def filter_models_by_device(device: str) -> dict:
-    if device == 'cpu':
-        return {id: conf for id, conf in AVAILABLE_MODELS.items() if not conf.get('req_gpu', False)}
+def has_gpu() -> bool:
+    try:
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
+def get_device(choice: DeviceChoice) -> str:
+    if choice == DeviceChoice.GPU:
+        if not has_gpu():
+            raise RuntimeError("GPU solicitada, mas não disponível")
+        return "cuda"
+    if choice == DeviceChoice.CPU:
+        return "cpu"
+    # AUTO
+    return "cuda" if has_gpu() else "cpu"
+
+
+def filter_models_for_device(device: str) -> dict:
+    if device == "cpu":
+        return {k: v for k, v in AVAILABLE_MODELS.items() if not v.get("req_gpu", False)}
     return AVAILABLE_MODELS
