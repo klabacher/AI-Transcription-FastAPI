@@ -1,11 +1,15 @@
+# --- Core API & Web UI ---
 fastapi
 uvicorn[standard]
 python-multipart
 jinja2
 aiofiles
+
+# --- ML & Audio Processing ---
 torch
 faster-whisper
 transformers[torch]
+accelerate
 soundfile
-sentencepiece
 huggingface-hub
+sentencepiece

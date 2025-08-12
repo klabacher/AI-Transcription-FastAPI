@@ -1,65 +1,73 @@
-# setup_worker.py
 import sys
 import os
 import traceback
-from logging_config import setup_root_logging, get_logger
-from config import AVAILABLE_MODELS
-from engine import load_model
 
-# optional: huggingface cache helper
+# Garante que o script encontre os outros módulos
+sys.path.append(os.getcwd())
+
+from config import AVAILABLE_MODELS
+from logging_config import setup_root_logging, get_logger
+
+# Importa as bibliotecas necessárias para o download
 try:
+    from faster_whisper import WhisperModel
+    from transformers import pipeline as hf_pipeline
     from huggingface_hub import snapshot_download
-except Exception:
-    snapshot_download = None
+except ImportError as e:
+    print(f"ERRO: Biblioteca de IA não encontrada: {e}", file=sys.stderr)
+    print("Por favor, instale as dependências com 'pip install -r requirements.txt'", file=sys.stderr)
+    sys.exit(1)
 
 def run_setup():
+    """
+    Script de setup para baixar e cachear todos os modelos necessários
+    antes da primeira execução da API.
+    """
     setup_root_logging()
     logger = get_logger("setup_worker")
 
     logger.info("="*80)
-    logger.info("INICIANDO SETUP: pré-baixando/verificando modelos...")
+    logger.info("INICIANDO VERIFICAÇÃO E DOWNLOAD DOS MODELOS...")
+    logger.info("Isso pode demorar MUITO tempo e consumir bastante espaço em disco.")
+    logger.info("As próximas inicializações da API serão rápidas.")
     logger.info("="*80)
 
-    failures = {}
+    success_count = 0
+    failure_count = 0
 
-    for model_id, cfg in AVAILABLE_MODELS.items():
-        logger.info(f"Verificando modelo '{model_id}' -> {cfg.get('model_name')} ({cfg.get('impl')})")
+    for model_id, config in AVAILABLE_MODELS.items():
+        logger.info(f"--- Processando modelo: '{model_id}' ---")
+        model_name = config['model_name']
+        impl = config['impl']
+        
         try:
-            # tentativa simples usando engine.load_model (força download via libs)
-            try:
-                load_model(model_id, cfg, device='cpu')
-                logger.info(f"✅ Modelo '{model_id}' carregado (via engine).")
-            except Exception as e:
-                logger.warning(f"Falha ao carregar '{model_id}' via engine: {e}")
-                # Se for HF model e huggingface_hub disponível, tentar snapshot_download
-                if snapshot_download and cfg.get('impl') == 'hf_pipeline':
-                    try:
-                        token = os.environ.get('HUGGINGFACE_HUB_TOKEN', None)
-                        logger.info(f"Tentando snapshot_download para '{cfg.get('model_name')}'...")
-                        snapshot_download(repo_id=cfg.get('model_name'), repo_type='model', use_auth_token=token)
-                        logger.info(f"✅ snapshot_download concluído para '{cfg.get('model_name')}'.")
-                    except Exception as e2:
-                        logger.warning(f"snapshot_download falhou para '{cfg.get('model_name')}': {e2}")
-                        raise
+            if impl == 'faster':
+                logger.info(f"Baixando '{model_name}' para faster-whisper...")
+                # Baixa o modelo usando a própria biblioteca, que gerencia o cache
+                _ = WhisperModel(model_name, device='cpu', compute_type='int8')
+            
+            elif impl == 'hf_pipeline':
+                logger.info(f"Baixando '{model_name}' do Hugging Face Hub...")
+                # Usa snapshot_download para baixar todos os arquivos do repositório
+                snapshot_download(repo_id=model_name, allow_patterns=["*.json", "*.safetensors", "*.py", "*.md", "preprocessor_config.json"])
 
-                else:
-                    raise
+            logger.info(f"✅ Modelo '{model_id}' baixado e verificado com sucesso.")
+            success_count += 1
+        except Exception as e:
+            logger.error(f"❌ Falha no setup do modelo '{model_id}' ({model_name}).")
+            logger.error(f"   Erro: {e}")
+            logger.debug(traceback.format_exc())
+            failure_count += 1
+        logger.info("-" * (len(model_id) + 24))
 
-        except Exception as e_final:
-            failures[model_id] = str(e_final)
-            logger.error(f"❌ Erro no setup do modelo '{model_id}': {e_final}")
-            if logger.isEnabledFor(10):  # DEBUG level
-                logger.debug(traceback.format_exc())
 
-    logger.info("="*80)
-    if failures:
-        logger.warning(f"Setup finalizado com falhas em {len(failures)} modelo(s). Veja detalhes nos logs.")
-        for mid, err in failures.items():
-            logger.warning(f" - {mid}: {err}")
-        logger.info("Você pode tentar rodar novamente ou checar a conectividade / token HF.")
+    logger.info("\n" + "="*80)
+    if failure_count > 0:
+        logger.warning(f"SETUP CONCLUÍDO COM {failure_count} FALHA(S).")
+        logger.warning("A API pode não funcionar corretamente com os modelos que falharam.")
         sys.exit(1)
     else:
-        logger.info("✅ SETUP CONCLUÍDO: todos os modelos verificados com sucesso.")
+        logger.info(f"✅ SETUP CONCLUÍDO COM SUCESSO! ({success_count} modelos prontos)")
         logger.info("="*80)
         sys.exit(0)
 
