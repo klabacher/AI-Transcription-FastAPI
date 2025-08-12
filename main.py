@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="API de Transcrição Híbrida",
-    version="10.0-debuggable",
+    version="2.0-debuggable",
     lifespan=lifespan
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -144,7 +144,7 @@ def process_single_file_job(job_id: str, audio_bytes: bytes):
         process = subprocess.Popen(
             [sys.executable, "-u", "worker.py"], # -u para unbuffered output
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text_encoding='utf-8', errors='ignore'
+            text_encoding='utf-8'
         )
         with JOBS_LOCK: JOBS[job_id]['worker_pid'] = process.pid
         logger.debug(f"Worker para job {job_id[:8]} iniciado com PID: {process.pid}")

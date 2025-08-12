@@ -1,61 +1,83 @@
 import sys
 import os
+import io
+import json
+import soundfile as sf
+from pathlib import Path
+import tempfile
 
-# Garante que o script possa encontrar os outros módulos do projeto
 sys.path.append(os.getcwd())
 
-from config import AVAILABLE_MODELS
-from logging_config import setup_logging, get_logger
+from logging_config import setup_worker_logging, get_logger
+from engine import run_local_transcription, run_assemblyai_transcription
 
-def run_setup():
+def worker_task(json_job_data, audio_bytes):
     """
-    Este script é o "peão de setup". Sua única função é garantir que todos os
-    modelos locais sejam baixados e cacheados pelo menos uma vez.
+    Esta é a função que roda no processo isolado (o "bunker").
+    Ela agora se comunica via JSON e envia logs para stderr.
     """
-    setup_logging()
-    logger = get_logger("setup_worker")
-
-    logger.info("="*80)
-    logger.info("INICIANDO VERIFICAÇÃO E DOWNLOAD DOS MODELOS (PODE DEMORAR BASTANTE)...")
-    logger.info("Isso só acontecerá uma vez. As próximas inicializações serão instantâneas.")
-    logger.info("="*80)
+    setup_worker_logging()
+    logger = get_logger("worker")
 
     try:
-        from faster_whisper import WhisperModel
-        from transformers import pipeline as hf_pipeline
-        import whisper as openai_whisper
-
-        models_to_setup = {k: v for k, v in AVAILABLE_MODELS.items() if v['impl'] != 'assemblyai'}
-
-        for model_id, config in models_to_setup.items():
-            try:
-                logger.info(f"Verificando modelo: '{model_id}'...")
-                
-                if config['impl'] == 'openai':
-                    openai_whisper.load_model(config['model_name'], device='cpu')
-                elif config['impl'] == 'faster':
-                    WhisperModel(config['model_name'], device='cpu', compute_type='int8')
-                elif config['impl'] == 'hf_pipeline':
-                    hf_pipeline("automatic-speech-recognition", model=config['model_name'])
-
-                logger.info(f"✅ Modelo '{model_id}' está pronto para uso.")
-            except Exception as e:
-                logger.warning(f"Falha ao baixar ou verificar o modelo '{model_id}'.")
-                logger.warning(f"   Erro: {e}")
-
-        logger.info("\n" + "="*80)
-        logger.info("✅ SETUP DE MODELOS CONCLUÍDO COM SUCESSO!")
-        logger.info("="*80)
+        job = json.loads(json_job_data)
+        logger.info(f"Worker (PID: {os.getpid()}) iniciado para o job {job['id'][:8]}.")
+        internal_path = job['internal_path']
         
-    except ImportError as e:
-        logger.critical(f"Bibliotecas de IA não encontradas. {e}")
-        logger.critical("Por favor, rode 'pip install -r requirements.txt' e tente novamente.")
-        sys.exit(1)
+        duration_seconds = 0
+        try:
+            logger.debug("Lendo metadados do áudio...")
+            audio_info = sf.info(io.BytesIO(audio_bytes))
+            duration_seconds = audio_info.duration
+            logger.debug(f"Duração do áudio detectada: {duration_seconds:.2f}s")
+        except Exception:
+            logger.warning("Não foi possível ler a duração do áudio.")
+            pass
+
+        suffix = Path(internal_path).suffix
+        tmp_audio_path = None
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp_audio_path = tmp.name
+        
+        logger.debug(f"Arquivo de áudio temporário criado em: {tmp_audio_path}")
+
+        impl = job['config']['model_config']['impl']
+        if impl == 'assemblyai':
+            logger.info("Roteando para a engine da AssemblyAI.")
+            result = run_assemblyai_transcription(job, tmp_audio_path)
+        else:
+            logger.info(f"Roteando para a engine local: {impl}")
+            result = run_local_transcription(job, tmp_audio_path, duration_seconds)
+
+        os.remove(tmp_audio_path)
+        logger.debug("Arquivo de áudio temporário removido.")
+
+        success_response = json.dumps({"status": "completed", "result": result})
+        sys.stdout.write(success_response)
+        sys.stdout.flush()
+        logger.info("Resultado de sucesso enviado para o gerente.")
+
     except Exception as e:
         import traceback
-        logger.critical(f"ERRO INESPERADO DURANTE O SETUP: {e}")
-        logger.error(traceback.format_exc())
-        sys.exit(1)
+        logger.error(f"Worker falhou com uma exceção: {e}")
+        error_info = {
+            "status": "failed",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+        error_response = json.dumps(error_info)
+        sys.stderr.write(error_response + '\n') # Adiciona newline para separar dos logs
+        sys.stderr.flush()
 
 if __name__ == "__main__":
-    run_setup()
+    job_data_size_bytes = sys.stdin.buffer.read(4)
+    job_data_size = int.from_bytes(job_data_size_bytes, 'big')
+    json_job_data = sys.stdin.buffer.read(job_data_size).decode('utf-8')
+
+    audio_data_size_bytes = sys.stdin.buffer.read(4)
+    audio_data_size = int.from_bytes(audio_data_size_bytes, 'big')
+    audio_bytes = sys.stdin.buffer.read(audio_data_size)
+    
+    worker_task(json_job_data, audio_bytes)
