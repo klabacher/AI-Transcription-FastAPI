@@ -18,21 +18,6 @@ from typing import List, Optional
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-# ================= DIAGNÓSTICO DE AMBIENTE =================
-print("="*60)
-print("🔍 INICIANDO DIAGNÓSTICO DENTRO DA APLICAÇÃO FASTAPI")
-print(f"🐍 Caminho do executável Python: {sys.executable}")
-print(f"🔥 Versão do PyTorch: {torch.__version__}")
-print(f"🔌 CUDA disponível para o PyTorch? {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"   CUDA compilado com PyTorch: {torch.version.cuda}")
-    print(f"   Dispositivo CUDA atual: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-else:
-    print("   ❌ PyTorch foi instalado SEM suporte a CUDA.")
-print("="*60)
-# ==========================================================
-
-
 # Adiciona o diretório raiz ao path para encontrar os módulos locais
 sys.path.append(os.getcwd())
 
