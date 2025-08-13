@@ -60,6 +60,9 @@ janitor_stop_event = threading.Event()
 # --- Lógica de Detecção de Hardware ---
 _hardware_caps_cache = None
 
+if os.environ.get("FORCE_CUDA", "0") == "1":
+    logger.info("FORCE_CUDA está ativado. Ignorando detecção automática de hardware.")
+
 def get_hardware_capabilities():
     """
     Verifica as capacidades de hardware (CUDA, FP16) uma única vez e armazena em cache.
@@ -77,7 +80,7 @@ def get_hardware_capabilities():
         "info_message": "Nenhum dispositivo CUDA compatível encontrado. Apenas modelos de CPU estarão disponíveis."
     }
     try:
-        if torch.cuda.is_available():
+        if torch.cuda.is_available() or os.environ.get("FORCE_CUDA", "0") == "1":
             caps["has_cuda"] = True
             device_id = 0
             caps["cuda_device_name"] = torch.cuda.get_device_name(device_id)
