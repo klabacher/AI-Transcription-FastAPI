@@ -6,7 +6,12 @@ jinja2
 aiofiles
 
 # --- ML & Audio Processing ---
-torch
+#!pip uninstall torch torchvision torchaudio -y
+
+# Instala a versão correta do PyTorch com suporte para o CUDA disponível no Google Colab
+#!pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+#torch
 faster-whisper
 transformers[torch]
 accelerate
