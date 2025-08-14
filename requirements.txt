@@ -4,6 +4,10 @@ uvicorn[standard]
 python-multipart
 jinja2
 aiofiles
+pydantic-settings
+redis
+prometheus-fastapi-instrumentator
+slowapi
 
 # --- ML & Audio Processing ---
 #!pip uninstall torch torchvision torchaudio -y
