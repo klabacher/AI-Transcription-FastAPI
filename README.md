@@ -1,110 +1,113 @@
-# 🚀 API de Transcrição Otimizada
+# 🚀 Optimized Transcription API
 
-[![Feito com FastAPI](https://img.shields.io/badge/Feito%20com-FastAPI-blue.svg)](https://fastapi.tiangolo.com/)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/klabacher/your-repo-name/blob/main/V3_Colab_Demo.ipynb)
+[![Made with FastAPI](https://img.shields.io/badge/Made%20with-FastAPI-blue.svg)](https://fastapi.tiangolo.com/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-[![Licença: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Uma API de transcrição de áudio de alta performance, construída com FastAPI e focada em oferecer acesso a modelos de *state-of-the-art* como `faster-whisper` e versões otimizadas do Hugging Face.
+[Ler em Português](./README-PT.md)
 
-O projeto foi desenhado para ser robusto e eficiente, utilizando workers em processos isolados para lidar com o processamento pesado de IA, garantindo que a API principal permaneça sempre responsiva.
+A high-performance audio transcription API built with FastAPI, focused on providing access to state-of-the-art models like `faster-whisper` and optimized versions from Hugging Face.
 
-*(Um GIF demonstrando a interface web seria ótimo aqui!)*
+The project is designed to be robust and efficient, using isolated worker processes to handle heavy AI processing, ensuring the main API remains responsive at all times.
 
-## ✨ Features Principais
+*(A GIF demonstrating the web interface would be great here!)*
 
-- **Workers Persistentes**: Modelos de IA são carregados uma única vez em processos worker separados, eliminando o tempo de carregamento a cada requisição e otimizando o uso de recursos (CPU/GPU).
-- **Sistema de Fila de Jobs**: As tarefas de transcrição são enfileiradas e processadas de forma assíncrona, permitindo que a API lide com um grande volume de requisições.
-- **Detecção de Hardware**: A API detecta automaticamente a presença de uma GPU (CUDA) e suas capacidades (como suporte a FP16) para ativar os modelos mais performáticos.
-- **Setup Automatizado**: Na primeira execução, um script de setup baixa e armazena em cache todos os modelos de IA necessários, agilizando as inicializações futuras.
-- **Interface de Testes (UI)**: Uma interface web simples e funcional (`/ui`) para testar a API, enviar arquivos, acompanhar o progresso dos jobs e visualizar os resultados.
-- **Processamento de Múltiplos Arquivos e .ZIP**: Envie vários arquivos de áudio ou um único arquivo `.zip` contendo os áudios para criar múltiplos jobs de uma só vez.
-- **Monitoramento e Gerenciamento**: Endpoints para verificar o status de jobs específicos, cancelar tarefas em andamento e limpar jobs antigos automaticamente.
+## ✨ Key Features
 
-## 🛠️ Stack e Escolhas de Arquitetura
+- **Persistent Workers**: AI models are loaded only once in separate worker processes, eliminating load times on each request and optimizing resource usage (CPU/GPU).
+- **Job Queue System**: Transcription tasks are queued and processed asynchronously, allowing the API to handle a high volume of requests.
+- **Hardware Detection**: The API automatically detects the presence of a GPU (CUDA) and its capabilities (like FP16 support) to enable the most performant models.
+- **Automated Setup**: On the first run, a setup script downloads and caches all necessary AI models, speeding up future initializations.
+- **Testing UI**: A simple and functional web interface (`/ui`) to test the API, upload files, track job progress, and view results.
+- **Multi-file & .ZIP Processing**: Upload multiple audio files or a single `.zip` file containing audios to create multiple jobs at once.
+- **Monitoring and Management**: Endpoints to check the status of specific jobs, cancel tasks in progress, and automatically clean up old jobs.
 
-A escolha das tecnologias e da arquitetura foi pensada para criar um sistema desacoplado e escalável.
+## 🛠️ Tech Stack & Architectural Choices
 
-- **FastAPI**: Escolhido pela sua alta performance, documentação automática (Swagger UI) e sintaxe moderna com `async/await`.
-- **Multiprocessing**: A decisão mais crítica da arquitetura. Usamos o módulo `multiprocessing` do Python para isolar os workers de IA do processo principal da API. Isso evita que o consumo intenso de memória e CPU dos modelos de transcrição trave o servidor web, garantindo que a API esteja sempre disponível para receber novas requisições.
-- **Gerenciamento de Ciclo de Vida (Lifespan)**: O FastAPI `lifespan` é usado para iniciar os pools de workers e a thread de limpeza (`janitor`) quando a API sobe, e para garantir um desligamento gracioso, finalizando todos os processos de forma segura.
-- **Vanilla JS/HTML/CSS**: A interface foi mantida intencionalmente simples, sem frameworks complexos, para ser leve e fácil de entender, focando na funcionalidade.
-- **IA e Áudio**:
-    - **`faster-whisper`**: Para transcrições otimizadas de alta velocidade em CPU e GPU.
-    - **`transformers`**: Para carregar modelos do Hugging Face Hub, como o `distil-whisper`.
-    - **`torch`**: A base para todos os modelos de IA.
-    - **`soundfile`**: Para ler informações de metadados dos arquivos de áudio, como a duração.
+- **FastAPI**: For high-performance APIs and automatic documentation.
+- **Multiprocessing**: To isolate AI workers from the main API process, ensuring responsiveness.
+- **Vanilla JS/HTML/CSS**: For a lightweight, functional, and easy-to-understand UI.
+- **AI & Audio**: `faster-whisper`, `transformers`, `torch`, and `soundfile`.
 
-## 🧠 Modelos Disponíveis
+## 🧠 Available Models
 
-A API disponibiliza os seguintes modelos, ativados conforme o hardware detectado:
+| Model ID                 | Implementation   | GPU Required? | Description                                                                    |
+| :----------------------- | :--------------- | :-----------: | :----------------------------------------------------------------------------- |
+| `distil_large_v3_ptbr`   | Hugging Face     |      ➖ No      | Recommended for local testing. Great quality in PT-BR, light and fast on CPU.  |
+| `faster_medium_fp16`     | faster-whisper   |      ✅ Yes     | Excellent balance between speed and quality on GPU.                            |
+| `faster_large-v3_fp16`   | faster-whisper   |      ✅ Yes     | Maximum quality and precision in PT-BR. Requires a powerful GPU (VRAM > 8GB).  |
+| `faster_large-v3_int8`   | faster-whisper   |      ➖ No      | Large-v3 quality with lower memory usage. Ideal for powerful CPUs or GPUs with limited VRAM. |
 
-| Model ID | Implementação | Requer GPU? | Descrição |
-| :--- | :--- | :--- | :--- |
-| `distil_large_v3_ptbr` | Hugging Face | ➖ Não | Recomendado para testes locais. Ótima qualidade em PT-BR, leve e rápido em CPU. |
-| `faster_medium_fp16` | faster-whisper | ✅ Sim | Excelente equilíbrio entre velocidade e qualidade em GPU. |
-| `faster_large-v3_fp16` | faster-whisper | ✅ Sim | Máxima qualidade e precisão em PT-BR. Requer GPU potente (VRAM > 8GB). |
-| `faster_large-v3_int8` | faster-whisper | ➖ Não | Qualidade do Large-v3 com menor uso de memória. Ideal para CPUs potentes ou GPUs com VRAM limitada. |
+## 🚀 Getting Started
 
-## 🚀 Como Usar
+You can run this project using Docker (recommended) or by setting up a local Python environment.
 
-### Pré-requisitos
-- Python 3.10 ou superior.
-- (Opcional, mas recomendado) Uma placa de vídeo NVIDIA com drivers CUDA instalados para performance máxima.
+### Prerequisites
+- Python 3.10+
+- Docker and Docker Compose (for the containerized setup).
+- (Optional) NVIDIA GPU with CUDA drivers for best performance.
 
-### Instalação e Execução
-1.  **Clone o repositório:**
+### 🐳 Option 1: Running with Docker (Recommended)
+1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/seu-usuario/seu-repositorio.git](https://github.com/seu-usuario/seu-repositorio.git)
-    cd seu-repositorio
+    git clone https://github.com/klabacher/your-repo-name.git # Replace with your repo URL
+    cd your-repo-name
     ```
-
-2.  **Crie e ative um ambiente virtual:**
+2.  **Build and run:**
     ```bash
-    python -m venv .venv
-    # Windows
-    .venv\Scripts\activate
-    # macOS / Linux
-    source .venv/bin/activate
+    docker-compose up --build
     ```
+    > **Note:** The first launch will take several minutes to download AI models.
 
-3.  **Instale as dependências:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+3.  **Access the application:**
+    - **Web UI**: `http://127.0.0.1:8000/ui`
+    - **API Docs**: `http://127.0.0.1:8000/docs`
 
-4.  **Inicie a API:**
-    ```bash
-    uvicorn main:app --reload
-    ```
-    > ⚠️ **Atenção na Primeira Execução!**
-    > Na primeira vez que você iniciar a API, um script de setup será executado para baixar todos os modelos de IA. Este processo pode demorar **vários minutos** e consumir um espaço considerável em disco. As inicializações seguintes serão quase instantâneas.
+### 🐍 Option 2: Local Python Environment
+1.  **Clone, create a virtual environment, and activate it.**
+2.  **Install dependencies:** `pip install -r requirements.txt`
+3.  **Start the API:** `uvicorn main:app --reload`
+4.  **Access the application** at the same URLs listed above.
 
-5.  **Acesse a aplicação:**
-    - **Interface Web**: Abra seu navegador em `http://127.0.0.1:8000/ui`
-    - **Documentação da API**: Acesse `http://127.0.0.1:8000/docs`
+## ☁️ Cloud Usage (Google Colab)
 
-## 📡 Endpoints da API
+For users who want to test the API without a local setup, a Google Colab notebook is provided (`V3_Colab_Demo.ipynb`). This allows you to run the entire application on Google's cloud infrastructure for free.
 
-- `GET /`: Retorna uma mensagem de status e informações sobre o hardware detectado.
-- `GET /models`: Lista os modelos de transcrição que estão ativos e compatíveis com o hardware atual.
-- `GET /queues`: Monitora o status de todos os jobs na fila.
-- `POST /jobs`: Cria um ou mais jobs de transcrição. Recebe `model_id`, `language`, `session_id` e os arquivos de áudio (`files`).
-- `GET /jobs/{job_id}`: Verifica o status, progresso e resultado de um job específico.
-- `POST /jobs/{job_id}/cancel`: Solicita o cancelamento de um job que está na fila ou em processamento.
-- `GET /jobs/{job_id}/download`: Baixa o resultado da transcrição em um arquivo `.txt`.
+**How to use it:**
 
-## ❤️ Créditos e Agradecimentos
+1.  **Open in Google Colab:**
+    *   Click the "Open in Colab" badge at the top of this README or manually open `V3_Colab_Demo.ipynb` in [Google Colab](https://colab.research.google.com/) via the GitHub tab.
 
-Este projeto só é possível graças ao incrível trabalho da comunidade open-source.
+2.  **Select a GPU Runtime (Recommended):**
+    *   In Colab, go to `Runtime` -> `Change runtime type` and select a `T4 GPU`.
 
-- **Modelos de IA**:
-    - **Whisper e faster-whisper**: Agradecimentos à [OpenAI](https://openai.com/) pelo modelo Whisper original e a [Guillaume Klein (SYSTRAN)](https://github.com/guillaumekln/faster-whisper) pela implementação otimizada `faster-whisper`.
-    - **distil-whisper-large-v3-ptbr**: Obrigado ao usuário [freds0](https://huggingface.co/freds0) do Hugging Face por treinar e disponibilizar a versão destilada para português.
+3.  **Run the Cells:**
+    *   Execute the notebook cells in order. The notebook will guide you through installing dependencies, starting the API, and sending a test job.
 
-- **Ferramentas**:
-    - [FastAPI](https://fastapi.tiangolo.com/) por ser um framework web fantástico.
-    - [PyTorch](https://pytorch.org/) e [Hugging Face](https://huggingface.co/) por democratizarem o acesso a modelos de Machine Learning.
+## 📡 API Endpoints
+
+- `GET /`: API status and hardware info.
+- `GET /models`: List available models.
+- `GET /queues`: Monitor job queues.
+- `POST /jobs`: Create transcription jobs.
+- `GET /jobs/{job_id}`: Check job status.
+- `POST /jobs/{job_id}/cancel`: Cancel a job.
+- `GET /jobs/{job_id}/download`: Download transcription result.
+
+## 📄 License
+
+This project was created by **[klabacher](https://github.com/klabacher)** and is licensed under the **MIT License**. We ask that you please provide attribution if you use this code.
+
+## ❤️ Credits and Acknowledgements
+
+- **Creator**:
+    - **[klabacher](https://github.com/klabacher)**: Initial development and project architecture.
+- **AI Models**:
+    - Thanks to **OpenAI**, **Guillaume Klein (SYSTRAN)**, and **freds0** on Hugging Face.
+- **Tools**:
+    - [FastAPI](https://fastapi.tiangolo.com/), [PyTorch](https://pytorch.org/), and [Hugging Face](https://huggingface.co/).
 
 ---
 
-> **Aviso**: Este projeto foi desenvolvido com o auxílio de Inteligência Artificial para acelerar a criação de código, resolver problemas e gerar documentação.
+> **Disclaimer**: This project was developed with the assistance of Artificial Intelligence.
