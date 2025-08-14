@@ -15,8 +15,12 @@ try:
     from huggingface_hub import snapshot_download
 except ImportError as e:
     print(f"ERRO: Biblioteca de IA não encontrada: {e}", file=sys.stderr)
-    print("Por favor, instale as dependências com 'pip install -r requirements.txt'", file=sys.stderr)
+    print(
+        "Por favor, instale as dependências com 'pip install -r requirements.txt'",
+        file=sys.stderr,
+    )
     sys.exit(1)
+
 
 def run_setup():
     """
@@ -26,30 +30,39 @@ def run_setup():
     setup_root_logging()
     logger = get_logger("setup_worker")
 
-    logger.info("="*80)
+    logger.info("=" * 80)
     logger.info("INICIANDO VERIFICAÇÃO E DOWNLOAD DOS MODELOS...")
     logger.info("Isso pode demorar MUITO tempo e consumir bastante espaço em disco.")
     logger.info("As próximas inicializações da API serão rápidas.")
-    logger.info("="*80)
+    logger.info("=" * 80)
 
     success_count = 0
     failure_count = 0
 
     for model_id, config in AVAILABLE_MODELS.items():
         logger.info(f"--- Processando modelo: '{model_id}' ---")
-        model_name = config['model_name']
-        impl = config['impl']
-        
+        model_name = config["model_name"]
+        impl = config["impl"]
+
         try:
-            if impl == 'faster':
+            if impl == "faster":
                 logger.info(f"Baixando '{model_name}' para faster-whisper...")
                 # Baixa o modelo usando a própria biblioteca, que gerencia o cache
-                _ = WhisperModel(model_name, device='cpu', compute_type='int8')
-            
-            elif impl == 'hf_pipeline':
+                _ = WhisperModel(model_name, device="cpu", compute_type="int8")
+
+            elif impl == "hf_pipeline":
                 logger.info(f"Baixando '{model_name}' do Hugging Face Hub...")
                 # Usa snapshot_download para baixar todos os arquivos do repositório
-                snapshot_download(repo_id=model_name, allow_patterns=["*.json", "*.safetensors", "*.py", "*.md", "preprocessor_config.json"])
+                snapshot_download(
+                    repo_id=model_name,
+                    allow_patterns=[
+                        "*.json",
+                        "*.safetensors",
+                        "*.py",
+                        "*.md",
+                        "preprocessor_config.json",
+                    ],
+                )
 
             logger.info(f"✅ Modelo '{model_id}' baixado e verificado com sucesso.")
             success_count += 1
@@ -60,16 +73,20 @@ def run_setup():
             failure_count += 1
         logger.info("-" * (len(model_id) + 24))
 
-
-    logger.info("\n" + "="*80)
+    logger.info("\n" + "=" * 80)
     if failure_count > 0:
         logger.warning(f"SETUP CONCLUÍDO COM {failure_count} FALHA(S).")
-        logger.warning("A API pode não funcionar corretamente com os modelos que falharam.")
+        logger.warning(
+            "A API pode não funcionar corretamente com os modelos que falharam."
+        )
         sys.exit(1)
     else:
-        logger.info(f"✅ SETUP CONCLUÍDO COM SUCESSO! ({success_count} modelos prontos)")
-        logger.info("="*80)
+        logger.info(
+            f"✅ SETUP CONCLUÍDO COM SUCESSO! ({success_count} modelos prontos)"
+        )
+        logger.info("=" * 80)
         sys.exit(0)
+
 
 if __name__ == "__main__":
     run_setup()
