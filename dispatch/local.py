@@ -8,38 +8,76 @@ from pathlib import Path
 sys.path.append(os.getcwd())
 
 from .base import AbstractJobDispatcher
-from worker import worker_process
 from logging_config import get_logger
+from engine import load_model_for_worker, transcribe_audio
+import soundfile as sf
+import traceback
+
 
 logger = get_logger("local_dispatcher")
 
-# A simple, in-memory queue for local dispatching.
-# In a real local setup, this would be part of a more robust process manager.
-# For this refactoring, we'll keep it simple.
-# NOTE: This approach has limitations and is not suitable for production.
-# The worker process started will be detached.
-ctx = mp.get_context("spawn")
-task_queue = ctx.Queue()
-result_queue = ctx.Queue()
+
+def local_worker_process(task: dict):
+    """
+    A simplified worker process for the 'local' execution mode.
+    This function is designed to be the target of a multiprocessing.Process.
+    It performs the transcription and logs the result. It does not report
+    progress back to a central store, as it's designed for simple,
+    fire-and-forget local processing.
+    """
+    job_id = task["job_id"]
+    audio_path = task["audio_path"]
+    model_config = task["model_config"]
+    model_id = model_config.get("model_name", "default")
+
+    logger.info(f"[LocalWorker] Starting job {job_id} for model {model_id}")
+    try:
+        # 1. Load model
+        # This is inefficient as the model is loaded for every job.
+        # A more advanced local implementation would use a persistent worker pool.
+        device = "cuda" if os.environ.get("FORCE_CUDA", "0") == "1" else "cpu"
+        model = load_model_for_worker(model_id, model_config, device=device)
+
+        # 2. Transcribe
+        duration_seconds = sf.info(audio_path).duration
+        transcription_generator = transcribe_audio(
+            model, model_config, audio_path, duration_seconds
+        )
+
+        final_result = None
+        for item in transcription_generator:
+            if isinstance(item, dict):
+                final_result = item
+
+        if final_result:
+            logger.info(
+                f"[LocalWorker] Job {job_id} completed. Result: {final_result['text'][:50]}..."
+            )
+        else:
+            logger.error(f"[LocalWorker] Job {job_id} failed to produce a result.")
+
+    except Exception:
+        logger.error(
+            f"[LocalWorker] Job {job_id} failed with an exception:\n{traceback.format_exc()}"
+        )
+    finally:
+        # 3. Cleanup
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+            logger.debug(f"[LocalWorker] Cleaned up temp file: {audio_path}")
 
 
 class LocalDispatcher(AbstractJobDispatcher):
     """
     A job dispatcher that runs transcription jobs locally using multiprocessing.
-
-    This dispatcher is intended for development and single-machine deployments.
-    It replicates the behavior of the V2 application by starting a new process
-    for each job.
     """
 
     def __init__(self):
-        # Start a single worker process for the local dispatcher instance
-        # This is a simplified model. A more robust implementation might manage a pool.
-        # For now, we assume one model is used locally.
-        # This part of the logic is a placeholder and will be more tightly integrated
-        # with the worker refactoring in Phase 3.
-        logger.info("Initializing LocalDispatcher.")
-        # The actual worker start is deferred until dispatch, to match V2's per-job process.
+        logger.info(
+            "Initializing LocalDispatcher. New processes will be spawned per job."
+        )
+        # Using 'spawn' context is safer and avoids issues with CUDA and forks.
+        self.mp_context = mp.get_context("spawn")
 
     async def dispatch(
         self,
@@ -51,6 +89,7 @@ class LocalDispatcher(AbstractJobDispatcher):
     ) -> None:
         """
         Dispatches a job by saving the file locally and starting a new process.
+        The process is detached ('fire and forget').
         """
         try:
             suffix = Path(internal_path).suffix or ".tmp"
@@ -62,21 +101,6 @@ class LocalDispatcher(AbstractJobDispatcher):
                 f"Dispatching job {job_id} locally. Audio saved to {audio_path}"
             )
 
-            # The worker process needs more than just the audio path.
-            # It needs the full task details. We will adapt this in Phase 3.
-            # For now, we will pass a simplified task dictionary.
-
-            # This is a significant simplification. The V2 worker expected
-            # queues and model details at startup. The V3 worker will be different.
-            # We are creating a detached process here.
-
-            # This part is tricky as the V2 worker is not designed to be started this way.
-            # I will need to refactor the worker_process function signature in Phase 3.
-            # For now, I will assume a placeholder function signature.
-            # Let's assume the worker can be started with just the task.
-            # This will fail until worker.py is refactored.
-
-            # Placeholder for what the V3 worker will need
             task = {
                 "job_id": job_id,
                 "audio_path": audio_path,
@@ -84,21 +108,15 @@ class LocalDispatcher(AbstractJobDispatcher):
                 "model_config": model_config,
             }
 
-            # This is a conceptual placeholder. The actual process start
-            # will be refined in Phase 3 when the worker is refactored.
-            # The original worker_process is not designed to be called this way.
-            # I'll create a simplified placeholder in worker.py for now.
-            logger.warning(
-                "LocalDispatcher is using a placeholder for process creation."
-            )
-            logger.info(f"Job {job_id} sent to local processing queue.")
+            # Start a new, detached process for the job
+            process = self.mp_context.Process(target=local_worker_process, args=(task,))
+            process.daemon = True  # Allows main process to exit even if worker is running
+            process.start()
 
-            # In a true local implementation, we would start a process here.
-            # For now, we will log the intent.
-            # mp.Process(target=worker_process, args=(task,)).start()
+            logger.info(f"Started detached process {process.pid} for job {job_id}.")
 
         except Exception as e:
             logger.error(f"Failed to dispatch job {job_id} locally: {e}")
-            # In a real scenario, we would need to update the job status to 'failed'.
-            # This will be handled by the JobService in Phase 3.
+            # In a real scenario with state, we'd update the job status to 'failed'.
+            # Here, we just log the error.
             pass
