@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
         languageSelect: document.getElementById('language-select'),
         transcribeButton: document.getElementById('transcribe-button'),
         clearJobsButton: document.getElementById('clear-jobs-button'),
+        downloadSessionZipButton: document.getElementById('download-session-zip-button'),
         audioFilesInput: document.getElementById('audio-files'),
         jobsTableBody: document.getElementById('jobs-table-body'),
     };
@@ -247,6 +248,20 @@ document.addEventListener('DOMContentLoaded', () => {
             state.pollInterval = null;
         }
     }
+    
+    function downloadSessionZip() {
+        if (!state.sessionId) {
+            alert("ID da sessão não encontrado.");
+            return;
+        }
+        const completedJobs = document.querySelectorAll('.job-status.status-completed');
+        if (completedJobs.length === 0) {
+            alert("Nenhum job foi concluído nesta sessão para ser baixado.");
+            return;
+        }
+        console.log(`Iniciando download do ZIP para a sessão: ${state.sessionId}`);
+        window.open(`/jobs/download/session/${state.sessionId}`, '_blank');
+    }
 
     function escapeHtml(unsafe) {
         return unsafe
@@ -263,6 +278,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (ui.clearJobsButton) {
         ui.clearJobsButton.addEventListener('click', clearJobs);
+    }
+    if (ui.downloadSessionZipButton) {
+        ui.downloadSessionZipButton.addEventListener('click', downloadSessionZip);
     }
 
     getOrSetSessionId();

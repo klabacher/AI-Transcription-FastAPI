@@ -10,8 +10,9 @@ import multiprocessing as mp
 import subprocess
 import torch
 import logging
+import zipfile
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request, Query, Response
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from typing import List, Optional
@@ -242,7 +243,7 @@ async def lifespan(app: FastAPI):
     shutdown_worker_pools()
     logger.info("Limpeza concluída. Até mais!")
 
-app = FastAPI(title="API de Transcrição Otimizada", description="Focada em `faster-whisper` e modelos destilados com workers persistentes.", version="2.1.1-intelligent-startup", lifespan=lifespan)
+app = FastAPI(title="API de Transcrição Otimizada", description="Focada em `faster-whisper` e modelos destilados com workers persistentes.", version="2.2.0-zip-download", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="static")
 
@@ -376,3 +377,31 @@ def download_job_result(job_id: str, text_type: str = "transcription_dialogue_ma
         result_text = job['result'].get(text_type, "Formato de texto solicitado não encontrado.")
         safe_filename = Path(job['internal_path']).with_suffix('.txt').name
     return Response(content=result_text, media_type="text/plain", headers={'Content-Disposition': f'attachment; filename="{safe_filename}"'})
+
+@app.get("/jobs/download/session/{session_id}", tags=["Resultados"])
+def download_session_results(session_id: str, text_type: str = "transcription_dialogue_markdown"):
+    
+    zip_buffer = io.BytesIO()
+    
+    with JOBS_LOCK:
+        completed_jobs = [job for job in JOBS.values() if job.get('session_id') == session_id and job.get('status') == 'completed']
+
+    if not completed_jobs:
+        raise HTTPException(status_code=404, detail="Nenhum job concluído encontrado para esta sessão.")
+
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for job in completed_jobs:
+            result_text = job['result'].get(text_type, "Formato de texto solicitado não encontrado.")
+            file_name_in_zip = Path(job['internal_path']).with_suffix('.txt').name
+            zip_file.writestr(file_name_in_zip, result_text)
+    
+    zip_buffer.seek(0)
+    
+    safe_session_id = "".join(c for c in session_id if c.isalnum() or c in ('-', '_'))
+    zip_filename = f"transcricoes_sessao_{safe_session_id[:8]}.zip"
+    
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
+    )
